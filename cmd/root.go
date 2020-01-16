@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"os"
@@ -27,7 +26,6 @@ var mappings string
 var certPath string
 var keyPath string
 var sport int
-var port int
 
 // Config for the reverse proxy
 type Config struct {
@@ -38,8 +36,8 @@ func init() {
 	RootCmd.Flags().StringVarP(&mappings, "map", "m", "", "Source directory to read from")
 	RootCmd.Flags().StringVar(&certPath, "cert", os.Getenv("HOME")+"/.gloss/cert.pem", "Path to cert")
 	RootCmd.Flags().StringVar(&keyPath, "key", os.Getenv("HOME")+"/.gloss/key.pem", "Path to cert key")
-	RootCmd.Flags().IntVar(&sport, "sport", 4443, "SSL listening port")
-	RootCmd.Flags().IntVar(&port, "port", 0, "HTTP listening port (0 disables HTTP Proxy)")
+	RootCmd.Flags().IntVar(&sport, "sport", 443, "SSL listening port")
+
 }
 
 func (c *Config) setupMapping(mappingStr *string) {
@@ -54,7 +52,7 @@ func (c *Config) setupMapping(mappingStr *string) {
 		if s[0] == "*" {
 			StdLog.Printf("Mapping * to %d\n", proxyPort)
 		} else {
-			StdLog.Printf("Mapping %s.* to %d\n", s[0], proxyPort)
+			StdLog.Printf("Mapping %s:%d to %d\n", s[0], sport, proxyPort)
 		}
 		c.mappings[s[0]] = proxyPort
 	}
@@ -86,15 +84,17 @@ func multipleHostReverseProxy(config *Config) *httputil.ReverseProxy {
 	// Fairly simple right now:
 	// use the subdomain to route to a specific port
 	director := func(req *http.Request) {
-		domains := strings.Split(req.Host, ".")
-		topSubdomain := domains[0]
-		port := config.mappings["*"]
-		if config.mappings[topSubdomain] > 0 {
-			port = config.mappings[topSubdomain]
+		port, ok := config.mappings[req.Host]
+		if !ok {
+			StdLog.Println("No mapping found for domain", req.Host)
+			return
 		}
 		req.URL.Scheme = "http"
+		// NOTE: use 127.0.0.1 instead of localhost, to force IPv4
 		req.URL.Host = "localhost:" + strconv.Itoa(port)
+		req.Host = "localhost:" + strconv.Itoa(port)
 	}
+
 	return &httputil.ReverseProxy{Director: director, Transport: &upstreamTransport{config: config}}
 }
 
@@ -131,38 +131,30 @@ var RootCmd = &cobra.Command{
 	Long: `
 gloss lets you run a simple ssl reverse proxy on you local machine
 
-Run 'gloss setup' to create your local certs (*.local.dev and local.dev)
-Run 'gloss --map "*:3000"' to map any *.local.dev hostname to a webserver running on port 3000
+Run 'gloss setup --host example.org' to create your local certs
+Run 'gloss --map "example.org:8080"' to map map example.org to port 8080
 
 More information about gloss can be found at https://github.com/mdp/gloss
 `,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cert, err := certs.GetCerts(&certPath, &keyPath)
 		if err != nil {
-			return errors.New("Unable to find SSL cert, make sure you run setup first\ne.g.\tgloss setup --host='*.local.dev,local.dev'")
+			return errors.New("Unable to find SSL cert, make sure you run setup first\ne.g.\tgloss setup --host='example.org'")
 		}
 		config := Config{}
 		if len(mappings) < 1 {
-			return errors.New("What ports do you want to map to?\ne.g.\t`gloss --map '*:3000,someapp:4000'`\n")
+			return errors.New("What ports do you want to map to?\ne.g.\t`gloss --map 'example.org:8080'`\n")
 		}
 		config.setupMapping(&mappings)
 		tlsConfig := tls.Config{Certificates: []tls.Certificate{cert}}
 		tlsConfig.Rand = rand.Reader
-		printPortRedirHelp(sport)
+		// printPortRedirHelp(sport)
 		proxy := multipleHostReverseProxy(&config)
 		s := &http.Server{
 			Handler:        &httpHandler{proxy: *proxy},
 			ReadTimeout:    10 * time.Second,
 			WriteTimeout:   10 * time.Second,
 			MaxHeaderBytes: 1 << 20,
-		}
-		if port > 0 {
-			httpService := ":" + strconv.Itoa(port)
-			httpListener, err := net.Listen("tcp", httpService)
-			if err != nil {
-				return err
-			}
-			go s.Serve(httpListener)
 		}
 		tlsService := ":" + strconv.Itoa(sport)
 		tlsListener, err := tls.Listen("tcp", tlsService, &tlsConfig)
