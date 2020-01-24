@@ -1,18 +1,25 @@
-EXECUTABLE := gloss
+.PHONY: build fmt lint run test vendor_clean vendor_get vendor_update vet list
 
-all: clean install build
+BINARY=gloss
+
+VERSION=v0.1
+BUILD=`git rev-parse HEAD`
+
+LDFLAGS=-ldflags "-X main.version=${VERSION} -X main.build=${BUILD}"
+
+.DEFAULT_GOAL: build
 
 build:
-	go build .
+	go build ${LDFLAGS} -o ${BINARY} ./*.go
 
-release:
-	goxc
+all: osx linux windows
+.PHONY: all
 
-install:
-	go get github.com/laher/goxc
-	go install
+osx:
+	GOOS="darwin" GOARCH="amd64" go build ${LDFLAGS} -o ${BINARY}-osx ./*.go
 
-clean:
-	rm -rf debian releases
+linux:
+	GOOS="linux" GOARCH="amd64" go build ${LDFLAGS} -o ${BINARY}-linux ./*.go
 
-.PHONY: clean release dep install
+#windows:
+#	GOOS="windows" GOARCH="amd64" go build ${LDFLAGS} -o ${BINARY}.exe ./*.go
