@@ -12,7 +12,7 @@ LDFLAGS=-ldflags "-X main.version=${VERSION} -X main.build=${BUILD}"
 build:
 	go build ${LDFLAGS} -o ${BINARY} ./*.go
 
-all: osx linux windows
+all: osx linux
 .PHONY: all
 
 osx:
